@@ -81,6 +81,9 @@ set(GBARECOMP_MINGW_PREFIX_UNIX "/c/msys64/mingw64" CACHE PATH
 option(GBARECOMP_STATIC_RELEASE
     "Statically link SDL2 + the mingw C++ runtime into release exes"
     OFF)
+option(GBARECOMP_SELFHEAL_RECOMPILE_DEFAULT
+    "Enable runtime self-heal overlay compilation by default"
+    ON)
 
 # First-divergence co-simulation oracle (COSIM_ORACLE.md). When ON, compiles the
 # cosim full-state hash + cycle-keyed park/step TCP engine and arms the runtime_tick
@@ -211,16 +214,19 @@ function(gbarecomp_stage_mingw_runtime target_name)
     endforeach()
 endfunction()
 
+set(ARM_RECOMP_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/arm-recomp-core")
+include("${ARM_RECOMP_CORE_DIR}/cmake/ArmRecompCore.cmake")
+arm_recomp_core_sources(GBA_ARM_RECOMP_CORE_SOURCES armv4t_gba)
+arm_recomp_core_include_dirs(GBA_ARM_RECOMP_CORE_INCLUDE_DIRS armv4t_gba)
+
 add_library(gbarecomp_armv4t STATIC
-    src/armv4t/arm_decode.cpp
-    src/armv4t/thumb_decode.cpp
-    src/armv4t/arm_ir.cpp
-    src/armv4t/arm_codegen.cpp
+    ${GBA_ARM_RECOMP_CORE_SOURCES}
     src/armv4t/runtime_arm.cpp
     src/armv4t/symbol_lookup.cpp
-    src/armv4t/interpreter.cpp
 )
-target_include_directories(gbarecomp_armv4t PUBLIC src/armv4t)
+target_include_directories(gbarecomp_armv4t PUBLIC
+    src/armv4t
+    ${GBA_ARM_RECOMP_CORE_INCLUDE_DIRS})
 set_property(TARGET gbarecomp_armv4t PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,7 +417,8 @@ endif()
 # worktree root even
 # when a game project (MinishCapRecomp) pulls us in via add_subdirectory.
 target_compile_definitions(gbarecomp_runtime PRIVATE
-    GBARECOMP_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    GBARECOMP_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    GBARECOMP_SELFHEAL_RECOMPILE_DEFAULT=$<BOOL:${GBARECOMP_SELFHEAL_RECOMPILE_DEFAULT}>)
 target_link_libraries(gbarecomp_runtime PUBLIC
     gbarecomp_gba gbarecomp_debug gbarecomp_recompile_core
     gbarecomp_heal_gate)
@@ -531,8 +538,11 @@ target_include_directories(gba_recompile PRIVATE
 target_link_libraries(gba_recompile PRIVATE
     gbarecomp_recompile_core gbarecomp_armv4t gbarecomp_gba)
 
-add_executable(symbol_import tools/symbol_import/main.cpp)
-target_link_libraries(symbol_import PRIVATE gbarecomp_armv4t)
+# The decomp symbol importer is tools/symbol_import/import_decomp_symbols.py
+# (a standalone Python tool that reads readelf/link-map text and writes the
+# TSV + overlay TOML gba_recompile consumes). It replaced a C++ stub that only
+# printed "stub", so there is no executable to build here. See
+# docs/SYMBOL_OVERLAY.md.
 
 # test_rom_runner — direct-boots a recompiled jsmolka gba-suite test
 # ROM and reports r12 at exit. Two targets per ROM (ARM + THUMB):
@@ -703,6 +713,37 @@ add_test(NAME runtime_monolith_guard
 add_executable(decoder_smoke tests/armv4t/decoder_smoke.cpp)
 target_link_libraries(decoder_smoke PRIVATE gbarecomp_armv4t)
 add_test(NAME decoder_smoke COMMAND decoder_smoke)
+
+# Runtime address->name resolvers (function map + imported data-symbol map).
+add_executable(symbol_lookup_smoke tests/armv4t/symbol_lookup_smoke.cpp)
+target_link_libraries(symbol_lookup_smoke PRIVATE gbarecomp_armv4t)
+add_test(NAME symbol_lookup_smoke COMMAND symbol_lookup_smoke)
+
+# Overlay-config merge contract. Compiles config.cpp directly: it belongs to
+# the gba_recompile tool rather than a library, and the test drives its public
+# entry points (load_config / load_config_overlay) through real TOML files.
+add_executable(config_overlay_smoke
+    tests/recompile/config_overlay_smoke.cpp
+    tools/gba_recompile/config.cpp)
+target_include_directories(config_overlay_smoke PRIVATE
+    tools/gba_recompile
+    src/armv4t
+    "${GBARECOMP_TOMLPP_INCLUDE_DIR}")
+target_link_libraries(config_overlay_smoke PRIVATE
+    gbarecomp_recompile_core gbarecomp_armv4t gbarecomp_gba)
+add_test(NAME config_overlay_smoke COMMAND config_overlay_smoke)
+
+# Decomp symbol importer: synthetic readelf + link-map fixtures through
+# tools/symbol_import/import_decomp_symbols.py, compared against goldens.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME symbol_import_golden
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/symbol_import/run_golden.py")
+else()
+    message(STATUS
+        "gbarecomp: no Python3 interpreter; skipping symbol_import_golden")
+endif()
 
 add_executable(function_finder_tests tests/recompile/function_finder_test.cpp)
 target_link_libraries(function_finder_tests PRIVATE gbarecomp_recompile_core)
