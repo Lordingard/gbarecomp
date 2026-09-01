@@ -28,6 +28,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>  // div, abs
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace gba {
 namespace {
@@ -44,7 +47,16 @@ inline void      wr32(uint32_t a, uint32_t v){ bus_write_u32(a, v); }
 inline void      wr16(uint32_t a, uint16_t v){ bus_write_u16(a, v); }
 inline void      wr8 (uint32_t a, uint8_t  v){ bus_write_u8 (a, v); }
 
-inline int clz32(uint32_t x) { return x ? __builtin_clz(x) : 32; }
+inline int clz32(uint32_t x) {
+    if (!x) return 32;
+#if defined(_MSC_VER)
+    unsigned long index = 0;
+    _BitScanReverse(&index, x);
+    return 31 - static_cast<int>(index);
+#else
+    return __builtin_clz(x);
+#endif
+}
 
 constexpr float kPi = 3.14159265358979323846f;
 

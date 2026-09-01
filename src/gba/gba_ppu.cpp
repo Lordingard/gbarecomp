@@ -736,6 +736,7 @@ void render_scanline_internal(uint8_t* rgb,
         uint8_t layer = 5;
         bool target1 = false;
         bool target2 = false;
+        bool force_alpha = false;
         bool valid = false;
     };
 
@@ -825,7 +826,8 @@ void render_scanline_internal(uint8_t* rgb,
                       int key,
                       uint8_t layer,
                       bool target1,
-                      bool target2) {
+                      bool target2,
+                      bool force_alpha = false) {
         PixelCandidate cand;
         cand.color = color;
         to_rgb888(color, cand.rgb);
@@ -833,6 +835,7 @@ void render_scanline_internal(uint8_t* rgb,
         cand.layer = layer;
         cand.target1 = target1;
         cand.target2 = target2;
+        cand.force_alpha = force_alpha;
         cand.valid = true;
         if (key < top[x].key) {
             second[x] = top[x];
@@ -1214,8 +1217,8 @@ void render_scanline_internal(uint8_t* rgb,
                 const uint16_t color = load_u16_le(&obj_pal[pal_index * 2]);
                 uint32_t ux = static_cast<uint32_t>(screen_x);
                 bool t1 = blend_enabled(ux) &&
-                    obj_mode == 1;
-                submit(ux, color, key, 4, t1, obj_target2);
+                    ((first_targets & (1u << 4)) != 0);
+                submit(ux, color, key, 4, t1, obj_target2, obj_mode == 1);
             };
             if (rot_scale) {
                 int bw = disable_or_double ? sw * 2 : sw;
@@ -1283,8 +1286,9 @@ void render_scanline_internal(uint8_t* rgb,
         // EVA=0/EVB=16 is a valid blend (1st target fully fades into the 2nd) —
         // the Oak-intro character fade endpoint that previously snapped back to
         // opaque, leaving body/feet (BG2 + semi-transparent OBJ) out of sync.
-        if ((effect == 1 || top[x].layer == 4) &&
-            top[x].target1 && second[x].valid && second[x].target2 &&
+        const bool alpha_effect =
+            (effect == 1u && top[x].target1) || top[x].force_alpha;
+        if (alpha_effect && second[x].valid && second[x].target2 &&
             !(top[x].layer == 4 && second[x].layer == 4)) {
             const uint16_t blended = blend_alpha_gba555(
                 top[x].color, second[x].color,
@@ -1337,6 +1341,7 @@ void render_scanline_wide(uint8_t* rgb, uint32_t y, uint16_t dispcnt,
         uint8_t layer = 5;
         bool target1 = false;
         bool target2 = false;
+        bool force_alpha = false;
         bool valid = false;
     };
 
@@ -1446,7 +1451,7 @@ void render_scanline_wide(uint8_t* rgb, uint32_t y, uint16_t dispcnt,
         top[x].valid = true;
     }
     auto submit = [&](uint32_t x, uint16_t color, int key, uint8_t layer,
-                      bool target1, bool target2) {
+                      bool target1, bool target2, bool force_alpha = false) {
         PixelCandidate cand;
         cand.color = color;
         to_rgb888(color, cand.rgb);
@@ -1454,6 +1459,7 @@ void render_scanline_wide(uint8_t* rgb, uint32_t y, uint16_t dispcnt,
         cand.layer = layer;
         cand.target1 = target1;
         cand.target2 = target2;
+        cand.force_alpha = force_alpha;
         cand.valid = true;
         if (key < top[x].key) { second[x] = top[x]; top[x] = cand; }
         else if (key < second[x].key) { second[x] = cand; }
@@ -1880,8 +1886,9 @@ void render_scanline_wide(uint8_t* rgb, uint32_t y, uint16_t dispcnt,
                 }
                 const uint16_t color = load_u16_le(&obj_pal[pal_index * 2]);
                 uint32_t ux = static_cast<uint32_t>(screen_x);
-                bool t1 = blend_enabled(ux) && obj_mode == 1;
-                submit(ux, color, key, 4, t1, obj_target2);
+                bool t1 = blend_enabled(ux) &&
+                    ((first_targets & (1u << 4)) != 0);
+                submit(ux, color, key, 4, t1, obj_target2, obj_mode == 1);
             };
             if (rot_scale) {
                 int bw = disable_or_double ? sw * 2 : sw;
@@ -1979,8 +1986,9 @@ void render_scanline_wide(uint8_t* rgb, uint32_t y, uint16_t dispcnt,
         // EVA=0/EVB=16 is a valid blend (1st target fully fades into the 2nd) —
         // the Oak-intro character fade endpoint that previously snapped back to
         // opaque, leaving body/feet (BG2 + semi-transparent OBJ) out of sync.
-        if ((effect == 1 || top[x].layer == 4) &&
-            top[x].target1 && second[x].valid && second[x].target2 &&
+        const bool alpha_effect =
+            (effect == 1u && top[x].target1) || top[x].force_alpha;
+        if (alpha_effect && second[x].valid && second[x].target2 &&
             !(top[x].layer == 4 && second[x].layer == 4)) {
             const uint16_t blended = blend_alpha_gba555(
                 top[x].color, second[x].color,

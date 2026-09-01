@@ -1213,13 +1213,18 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     }
 #endif
 
-    // Resolve BIOS via the picker chain (argv path -> sidecar cache ->
-    // Win32 file dialog). Released binaries don't ship a default path
-    // that exists, so the picker is what makes a fresh install work
-    // without a CLI argument. CRC32 + SHA-1 mismatch is a soft warning
-    // so the user can boot with an uncatalogued region/revision; wrong
-    // size is a hard fail (see asset_picker.cpp).
-    {
+    // Resolve BIOS policy before the picker. HLE without intro can boot without
+    // a user BIOS; LLE or HLE-with-intro still needs the real 16 KiB image.
+    if (const char* e = std::getenv("GBARECOMP_BIOS_HLE"))
+        args.bios_hle = (e[0] && e[0] != '0');
+    if (const char* e = std::getenv("GBARECOMP_BIOS_HLE_KEEP_INTRO"))
+        args.bios_hle_keep_intro = (e[0] && e[0] != '0');
+#if !defined(GBARECOMP_HAVE_BIOS_RECOMP)
+    if (!args.bios_hle) args.bios_hle = true;
+    if (args.bios_hle_keep_intro) args.bios_hle_keep_intro = false;
+#endif
+    const bool needs_bios_file = !args.bios.empty() || !args.bios_hle || args.bios_hle_keep_intro;
+    if (needs_bios_file) {
         AssetSpec spec;
         spec.display_name   = "GBA BIOS";
         spec.dialog_filter  = "GBA BIOS (*.bin;*.BIN)\0*.bin;*.BIN\0"
@@ -1288,13 +1293,17 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     }
     // The picker has already validated SHA-1 (warn-and-try). Pass an
     // empty expected hash here so a non-canonical-but-warned dump
-    // doesn't trip a hard fail in the loader.
+    // doesn't trip a hard fail in the loader. In BIOS HLE boot-skip mode,
+    // an absent BIOS is intentional and the bus exposes zeroed BIOS bytes.
     gba::GbaBios bios;
-    if (!bios.load_from_file(args.bios, std::string{}, &err)) {
-        std::fprintf(stderr, "[gbarecomp:runtime] %s\n", err.c_str());
-        return 1;
+    bool bios_file_loaded = false;
+    if (needs_bios_file) {
+        if (!bios.load_from_file(args.bios, std::string{}, &err)) {
+            std::fprintf(stderr, "[gbarecomp:runtime] %s\n", err.c_str());
+            return 1;
+        }
+        bios_file_loaded = true;
     }
-
     std::vector<uint8_t> rom;
     if (!read_file(args.rom, &rom, &err)) {
         std::fprintf(stderr, "[gbarecomp:runtime] %s\n", err.c_str());
@@ -1322,8 +1331,12 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     }
 
     if (!args.quiet) {
-        std::printf("bios_loaded sha1=%s size=%zu\n",
-                    bios.sha1_hex().c_str(), gba::GbaBios::kSize);
+        if (bios_file_loaded) {
+            std::printf("bios_loaded sha1=%s size=%zu\n",
+                        bios.sha1_hex().c_str(), gba::GbaBios::kSize);
+        } else {
+            std::printf("bios_loaded skipped mode=HLE\n");
+        }
         std::printf("rom_loaded sha1=%s size=%zu title=\"%s\" code=%s "
                     "entry=0x%08x save=%s signature=%s\n",
                     rom_sha1.c_str(), rom.size(), header.game_title.c_str(),
@@ -1356,31 +1369,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // BIOS backend select: LLE (recompiled BIOS, the default + oracle) vs HLE
     // (SWIs serviced in-runtime, unimplemented ones falling back to LLE).
     // Config default from [bios].hle / --bios-hle; GBARECOMP_BIOS_HLE overrides
-    // (0 forces LLE, any other value forces HLE). Installs the runtime_swi hook.
-    // The boot-skip decision (below, after reset_recomp_cpu) reads args.bios_hle
-    // + args.bios_hle_keep_intro, so resolve the env overrides into args here.
-    if (const char* e = std::getenv("GBARECOMP_BIOS_HLE"))
-        args.bios_hle = (e[0] && e[0] != '0');
-    if (const char* e = std::getenv("GBARECOMP_BIOS_HLE_KEEP_INTRO"))
-        args.bios_hle_keep_intro = (e[0] && e[0] != '0');
-#if !defined(GBARECOMP_HAVE_BIOS_RECOMP)
-    if (!args.bios_hle) {
-        args.bios_hle = true;
-        if (!args.quiet) {
-            std::fprintf(stderr,
-                "[gbarecomp:runtime] recompiled BIOS is not linked; "
-                "using BIOS HLE boot instead\n");
-        }
-    }
-    if (args.bios_hle_keep_intro) {
-        args.bios_hle_keep_intro = false;
-        if (!args.quiet) {
-            std::fprintf(stderr,
-                "[gbarecomp:runtime] recompiled BIOS is not linked; "
-                "cannot keep the BIOS intro in HLE mode\n");
-        }
-    }
-#endif
+    // were resolved before BIOS asset selection. Installs the runtime_swi hook.
     gba::bios_hle_set_mode(args.bios_hle ? gba::BiosHleMode::On
                                          : gba::BiosHleMode::Off);
     if (!args.quiet)

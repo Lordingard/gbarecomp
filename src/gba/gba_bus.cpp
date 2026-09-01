@@ -424,6 +424,8 @@ void GbaBus::write16(uint32_t addr, uint16_t v) {
             if (save_.sram_enabled()) {
                 save_.sram_write(static_cast<uint32_t>(off),
                                  static_cast<uint8_t>(v & 0xFF));
+                save_.sram_write(static_cast<uint32_t>(off + 1),
+                                 static_cast<uint8_t>((v >> 8) & 0xFF));
                 return;
             }
             if (save_.flash_enabled()) {
@@ -478,6 +480,12 @@ void GbaBus::write32(uint32_t addr, uint32_t v) {
             if (save_.sram_enabled()) {
                 save_.sram_write(static_cast<uint32_t>(off),
                                  static_cast<uint8_t>(v & 0xFF));
+                save_.sram_write(static_cast<uint32_t>(off + 1),
+                                 static_cast<uint8_t>((v >> 8) & 0xFF));
+                save_.sram_write(static_cast<uint32_t>(off + 2),
+                                 static_cast<uint8_t>((v >> 16) & 0xFF));
+                save_.sram_write(static_cast<uint32_t>(off + 3),
+                                 static_cast<uint8_t>((v >> 24) & 0xFF));
                 return;
             }
             if (save_.flash_enabled()) {
