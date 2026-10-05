@@ -494,6 +494,15 @@ bool open_game_controller(Backend* b, int device_index) {
 
 void open_first_game_controller(Backend* b) {
     if (!b || b->controller) return;
+    const char* preferred = std::getenv("GBARECOMP_CONTROLLER_GUID");
+    if (preferred && *preferred) {
+        for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+            char guid[33] = {};
+            SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i), guid, sizeof(guid));
+            if (SDL_strcasecmp(guid, preferred) == 0 && open_game_controller(b, i)) return;
+        }
+        std::fprintf(stderr, "host_window: preferred controller unavailable; using available input\n");
+    }
     for (int i = 0; i < SDL_NumJoysticks(); ++i) {
         if (open_game_controller(b, i)) return;
     }
@@ -1917,7 +1926,7 @@ HostWindow::Events HostWindow::pump() {
         if (e.type == SDL_QUIT) {
             ev.quit = true;
         } else if (e.type == SDL_CONTROLLERDEVICEADDED) {
-            if (!b->controller) open_game_controller(b, e.cdevice.which);
+            if (!b->controller) open_first_game_controller(b);
         } else if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
             if (b->controller &&
                 e.cdevice.which == b->controller_id) {

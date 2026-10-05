@@ -337,6 +337,8 @@ struct SeamConfig {
     int  assist_fast_pad = RECOMP_LAUNCHER_PAD_AXIS(5, 1);   // right trigger
     int  rom_patch_enabled = 0;
     std::string rom_patch_path;
+    int input_source = 1;
+    std::string gamepad_guid;
 };
 
 inline void seam_config_load(const std::string& path, SeamConfig* c) {
@@ -387,6 +389,8 @@ inline void seam_config_load(const std::string& path, SeamConfig* c) {
         else if (key == "assist_fast_pad") c->assist_fast_pad = std::atoi(val.c_str());
         else if (key == "rom_patch_enabled") c->rom_patch_enabled = std::atoi(val.c_str());
         else if (key == "rom_patch_path") c->rom_patch_path = val;
+        else if (key == "input_source") c->input_source = std::atoi(val.c_str());
+        else if (key == "gamepad_guid") c->gamepad_guid = val;
     }
     if (c->scale < 1) c->scale = 1;
     if (c->scale > 8) c->scale = 8;
@@ -401,6 +405,10 @@ inline void seam_config_load(const std::string& path, SeamConfig* c) {
     if (c->assist_tools > 1) c->assist_tools = 1;
     if (c->assist_tools < -1) c->assist_tools = -1;
     c->rom_patch_enabled = c->rom_patch_enabled && !c->rom_patch_path.empty();
+    if (c->input_source < 0 || c->input_source > 2) c->input_source = 1;
+    if (c->gamepad_guid.size() != 32 ||
+        c->gamepad_guid.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+        c->gamepad_guid.clear();
 }
 
 // Rewrite ONLY the [Launcher] section of config.ini, preserving every other
@@ -454,6 +462,19 @@ inline void seam_config_save(const std::string& path, const SeamConfig& c) {
     f << "assist_fast_pad = " << c.assist_fast_pad << "\n";
     f << "rom_patch_enabled = " << c.rom_patch_enabled << "\n";
     f << "rom_patch_path = " << c.rom_patch_path << "\n";
+    f << "input_source = " << c.input_source << "\n";
+    f << "gamepad_guid = " << c.gamepad_guid << "\n";
+}
+
+inline void seam_apply_controller(const SeamConfig& cfg) {
+#if defined(_WIN32)
+    _putenv_s("GBARECOMP_CONTROLLER_GUID",
+               cfg.input_source == 2 ? cfg.gamepad_guid.c_str() : "");
+#else
+    if (cfg.input_source == 2 && !cfg.gamepad_guid.empty())
+        setenv("GBARECOMP_CONTROLLER_GUID", cfg.gamepad_guid.c_str(), 1);
+    else unsetenv("GBARECOMP_CONTROLLER_GUID");
+#endif
 }
 
 // ---- config.ini [Solar] ------------------------------------------------------
@@ -686,6 +707,7 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
 
     SeamConfig cfg;
     seam_config_load(config_path, &cfg);
+    seam_apply_controller(cfg);
     if (cfg.sharp_filter < 0)
         cfg.sharp_filter = opts.launcher_default_sharp_filter ? 1 : 0;
     if (cfg.affine_filter < 0)
@@ -764,7 +786,9 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     ls.enable_audio  = 1;
     ls.audio_freq    = 32768;             // GBA mixer base rate (display only)
     ls.volume        = cfg.volume;
-    ls.player_src[0] = 1;                 // keyboard (gbarecomp host input)
+    ls.player_src[0] = cfg.input_source;
+    std::snprintf(ls.player_gamepad_guid[0], sizeof(ls.player_gamepad_guid[0]),
+                  "%s", cfg.gamepad_guid.c_str());
     ls.skip_launcher = cfg.skip_launcher;
     bool solar_in_launcher = false;
     if (opts.has_solar_sensor) solar_in_launcher = push_solar_settings(ls, solar);
@@ -895,8 +919,7 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     int rc = recomp_launcher_run_window(title.c_str(), &ls, &gi, dir.c_str(),
                                         seed_rom.c_str(),
                                         picked_rom, sizeof(picked_rom));
-    if (rc == 1) return 1;    // user closed the launcher: quit without booting
-    if (rc != 0) return 0;    // unavailable: fall back to the asset picker
+    if (rc != 0 && rc != 1) return 0; // unavailable: fall back to the asset picker
 
     // ---- persist + translate the committed settings -------------------------
     cfg.scale         = ls.window_scale > 0 ? ls.window_scale : cfg.scale;
@@ -929,12 +952,17 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     cfg.assist_fast_key = ls.assist_key_bind[1];
     cfg.assist_rewind_pad = ls.assist_pad_bind[0];
     cfg.assist_fast_pad = ls.assist_pad_bind[1];
+    cfg.input_source = ls.player_src[0];
+    cfg.gamepad_guid = ls.player_gamepad_guid[0];
     seam_config_save(config_path, cfg);
     // Only rewrite [Solar] when this recomp-ui pin actually surfaced the panel;
     // otherwise the values never round-tripped through it and writing them back
     // would just churn the file the game owns.
     if (solar_in_launcher && pull_solar_settings(ls, &solar))
         seam_solar_save(config_path, solar);
+    if (rc == 1) return 1; // persist edited preferences, but do not boot
+
+    seam_apply_controller(cfg);
 
     const std::string launch_rom = picked_rom[0] ? std::string(picked_rom) : seed_rom;
     if (!launch_rom.empty()) {
