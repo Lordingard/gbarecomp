@@ -51,6 +51,7 @@
 #include "ws_sidecar.h"
 #if defined(GBARECOMP_RUNTIME_UI)
 #include "recomp_runtime_ui.h"
+#include "runtime_control_preferences.h"
 #endif
 
 #include <algorithm>
@@ -220,8 +221,10 @@ struct Args {
 #define GBARECOMP_UI_KEY_FAST_FORWARD   "assist.fast_forward"
 #define GBARECOMP_UI_KEY_FAST_FORWARD_SPEED "assist.fast_forward_speed"
 #define GBARECOMP_UI_KEY_REWIND          "assist.rewind"
+#define GBARECOMP_UI_KEY_REWIND_ENABLED  "assist.rewind_enabled"
 
 struct RuntimeUiContext {
+    std::filesystem::path controls_path;
     HostWindow* window = nullptr;
     RecompRuntimeUi* ui = nullptr;
     float* gyro_sensitivity = nullptr;
@@ -234,6 +237,7 @@ struct RuntimeUiContext {
     int pending_save_slot = 0;
     int pending_load_slot = 0;
     bool pending_rewind = false;
+    bool rewind_enabled = true;
     bool assist_tools_exposed = false;
     bool assist_tools_enabled = true;
     bool fast_forward_latched = false;
@@ -257,6 +261,8 @@ int runtime_ui_get(void* opaque, const RecompRuntimeUiItem* item, int* out) {
         *out = c->assist_tools_enabled;
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_FORWARD) == 0)
         *out = c->fast_forward_latched;
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_REWIND_ENABLED) == 0)
+        *out = c->rewind_enabled;
     else if (std::strcmp(item->key,
                          GBARECOMP_UI_KEY_FAST_FORWARD_SPEED) == 0)
         *out = c->fast_forward_multiplier;
@@ -292,7 +298,9 @@ int runtime_ui_set(void* opaque, const RecompRuntimeUiItem* item, int value) {
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_ASSIST_ENABLED) == 0) {
         c->assist_tools_enabled = value != 0;
         if (!c->assist_tools_enabled) c->fast_forward_latched = false;
-    } else if (std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_FORWARD) == 0)
+    } else if (std::strcmp(item->key, GBARECOMP_UI_KEY_REWIND_ENABLED) == 0)
+        c->rewind_enabled = value != 0;
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_FORWARD) == 0)
         c->fast_forward_latched = value != 0;
     else if (std::strcmp(item->key,
                          GBARECOMP_UI_KEY_FAST_FORWARD_SPEED) == 0)
@@ -305,6 +313,19 @@ int runtime_ui_set(void* opaque, const RecompRuntimeUiItem* item, int value) {
 #endif
     else if (c->opts && c->opts->ui_set) return c->opts->ui_set(item->key, value);
     else return 0;
+    if (std::strcmp(item->key, GBARECOMP_UI_KEY_STATE_SLOT) == 0 ||
+        std::strcmp(item->key, GBARECOMP_UI_KEY_ASSIST_ENABLED) == 0 ||
+        std::strcmp(item->key, GBARECOMP_UI_KEY_REWIND_ENABLED) == 0 ||
+        std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_FORWARD_SPEED) == 0) {
+        RuntimeControlPreferences controls;
+        controls.assist_tools_enabled = c->assist_tools_enabled;
+        controls.rewind_enabled = c->rewind_enabled;
+        controls.fast_forward_multiplier = c->fast_forward_multiplier;
+        controls.state_slot = c->state_slot;
+        std::string error;
+        if (!save_runtime_controls(c->controls_path, controls, error))
+            std::fprintf(stderr, "[gbarecomp:runtime] %s\n", error.c_str());
+    }
     return 1;
 }
 
@@ -362,6 +383,8 @@ int runtime_ui_enabled(void* opaque, const RecompRuntimeUiItem* item) {
     if (!c || !item) return 1;
     if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0)
         return c->window->fullscreen() == 0;
+    if (std::strcmp(item->key, GBARECOMP_UI_KEY_REWIND) == 0 && !c->rewind_enabled)
+        return 0;
     if (c->assist_tools_exposed &&
         std::strcmp(item->key, GBARECOMP_UI_KEY_ASSIST_ENABLED) != 0 &&
         (std::strncmp(item->key, "assist.", 7) == 0 ||
@@ -2504,6 +2527,25 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         runtime_ui_context.state_slot_count = std::clamp<int>(
             opts.save_state_slot_count ? opts.save_state_slot_count : 9,
             1, 10);
+        runtime_ui_context.controls_path =
+            (argc > 0 && argv[0] ? std::filesystem::path(argv[0]).parent_path()
+                                : std::filesystem::path(".")) / "runtime-controls.toml";
+        RuntimeControlPreferences controls;
+        controls.assist_tools_enabled = runtime_ui_context.assist_tools_enabled;
+        controls.fast_forward_multiplier = runtime_ui_context.fast_forward_multiplier;
+        std::string controls_error;
+        if (load_runtime_controls(runtime_ui_context.controls_path, controls,
+                                  runtime_ui_context.state_slot_count, controls_error)) {
+            runtime_ui_context.assist_tools_enabled = controls.assist_tools_enabled;
+            runtime_ui_context.rewind_enabled = controls.rewind_enabled;
+            runtime_ui_context.fast_forward_multiplier = controls.fast_forward_multiplier;
+            runtime_ui_context.state_slot = controls.state_slot;
+            std::printf("runtime_controls_loaded speed=%d rewind=%d slot=%d assist=%d\n",
+                        controls.fast_forward_multiplier, controls.rewind_enabled,
+                        controls.state_slot, controls.assist_tools_enabled);
+        } else if (!controls_error.empty()) {
+            std::fprintf(stderr, "[gbarecomp:runtime] %s\n", controls_error.c_str());
+        }
 #if defined(RECOMP_RUNTIME_UI_KEY_GYRO_SENSITIVITY)
         static const RecompRuntimeUiItem gyro_item{
             RECOMP_RUNTIME_UI_KEY_GYRO_SENSITIVITY,
@@ -2640,6 +2682,12 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             runtime_ui_extras.push_back(fast_forward_speed_item);
 
             if (opts.rewind_history_seconds > 0) {
+                RecompRuntimeUiItem rewind_enabled_item{};
+                rewind_enabled_item.key = GBARECOMP_UI_KEY_REWIND_ENABLED;
+                rewind_enabled_item.section = "Assist Tools";
+                rewind_enabled_item.label = "Enable rewind";
+                rewind_enabled_item.type = RECOMP_RUNTIME_UI_BOOL;
+                runtime_ui_extras.push_back(rewind_enabled_item);
                 RecompRuntimeUiItem rewind_item{};
                 rewind_item.key         = GBARECOMP_UI_KEY_REWIND;
                 rewind_item.section     = "Assist Tools";
@@ -2715,6 +2763,13 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     int fast_forward_multiplier = std::clamp(
         win.fast_forward_multiplier(), 2, 10);
     auto capture_rewind_point = [&]() {
+#if defined(GBARECOMP_RUNTIME_UI)
+        if (!runtime_ui_context.rewind_enabled) {
+            rewind_history.clear();
+            next_rewind_capture_frame = ppu.frame_count();
+            return;
+        }
+#endif
         if (!rewind_capacity || !assist_tools_enabled()) return;
         const uint64_t frame = ppu.frame_count();
         if (frame < next_rewind_capture_frame) return;
@@ -3092,6 +3147,11 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         rewind_requested = rewind_requested ||
                            runtime_ui_context.pending_rewind;
         runtime_ui_context.pending_rewind = false;
+        rewind_requested = rewind_requested && runtime_ui_context.rewind_enabled;
+        if (!runtime_ui_context.rewind_enabled) {
+            rewind_history.clear();
+            next_rewind_capture_frame = ppu.frame_count();
+        }
 #endif
         if (rewind_requested && assist_tools_enabled()) {
             const uint64_t current = ppu.frame_count();

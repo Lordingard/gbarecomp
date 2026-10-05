@@ -18,6 +18,7 @@
 #include "presentation_layout.h"
 #if defined(GBARECOMP_RUNTIME_UI)
 #include "recomp_runtime_ui.h"
+#include "runtime_menu_input.h"
 #endif
 
 #if defined(GBARECOMP_HAVE_SDL2)
@@ -976,6 +977,10 @@ void runtime_imgui_render(Backend* b) {
 
 bool runtime_ui_event(RecompRuntimeUi* ui, const SDL_Event& e) {
     if (!ui) return false;
+    // Navigation keys belong to the game while the menu is closed. Only the
+    // two menu-opening inputs may be intercepted in that state.
+    if (!runtime_menu_owns_event(recomp_runtime_ui_is_open(ui), e))
+        return false;
     if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE &&
         !recomp_runtime_ui_is_open(ui)) {
         recomp_runtime_ui_open(ui);

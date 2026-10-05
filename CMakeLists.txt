@@ -528,6 +528,10 @@ else()
         "gbarecomp: using local toml++ at ${GBARECOMP_TOMLPP_INCLUDE_DIR}")
 endif()
 
+add_library(gbarecomp_runtime_preferences INTERFACE)
+target_include_directories(gbarecomp_runtime_preferences INTERFACE "${GBARECOMP_TOMLPP_INCLUDE_DIR}")
+target_link_libraries(gbarecomp_runtime PRIVATE gbarecomp_runtime_preferences)
+
 add_executable(gba_recompile
     tools/gba_recompile/main.cpp
     tools/gba_recompile/config.cpp)
