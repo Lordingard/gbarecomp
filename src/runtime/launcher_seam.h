@@ -628,6 +628,9 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
                                       const gbarecomp::RunOptions& opts) {
     using namespace gbarecomp_seam;
 
+    const bool explicit_save = std::any_of(args.begin(), args.end(),
+        [](const std::string& arg) { return arg == "--save" || arg == "--save-path"; });
+
     // ---- skip decisions -----------------------------------------------------
     bool force_launcher = false;
     bool skip_once = false;
@@ -872,8 +875,10 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
             const std::string save_path = opts.launcher_save_path && opts.launcher_save_path[0]
                 ? std::string(opts.launcher_save_path)
                 : launcher_save_path_for_rom(seed_rom);
-            args.push_back("--save-path");
-            args.push_back(save_path);
+            if (!explicit_save) {
+                args.push_back("--save-path");
+                args.push_back(save_path);
+            }
         }
         if (!seed_bios.empty()) {
             args.push_back("--bios");
@@ -939,8 +944,10 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
         const std::string save_path = opts.launcher_save_path && opts.launcher_save_path[0]
             ? std::string(opts.launcher_save_path)
             : launcher_save_path_for_rom(launch_rom);
-        args.push_back("--save-path");
-        args.push_back(save_path);
+        if (!explicit_save) {
+            args.push_back("--save-path");
+            args.push_back(save_path);
+        }
 
         // Persist the pick NOW (not only after a successful boot) so the next
         // launch prefills instead of re-prompting. Mirrors the runtime asset

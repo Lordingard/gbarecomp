@@ -33,6 +33,7 @@
 #include "runtime_arm.h"
 #include "runtime_bus_bridge.h"
 #include "save_config.h"
+#include "save_file.h"
 #include "self_heal.h"
 #include "overlay_loader.h"
 #include "../gba/mod_audio.h"
@@ -1777,21 +1778,12 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             return false;
         }
         std::error_code ec;
-        std::filesystem::rename(tmp, args.save_path, ec);  // REPLACE_EXISTING on NTFS/POSIX
-        if (ec) {
-            // Rare filesystems refuse atomic rename-over; fall back to
-            // remove-then-rename (a narrower non-atomic window, still far
-            // better than writing the target in place).
-            std::error_code ec2;
-            std::filesystem::remove(args.save_path, ec2);
-            std::filesystem::rename(tmp, args.save_path, ec2);
-            if (ec2) {
-                std::fprintf(stderr,
-                             "[gbarecomp:runtime] save rename failed: %s\n",
-                             ec2.message().c_str());
-                std::filesystem::remove(tmp, ec2);
-                return false;
-            }
+        if (!gbarecomp::replace_save_file(tmp, args.save_path, ec)) {
+            std::fprintf(stderr,
+                         "[gbarecomp:runtime] save replacement failed: %s; "
+                         "previous save preserved, recovery file: %s\n",
+                         ec.message().c_str(), tmp.c_str());
+            return false;
         }
         bus.save().clear_dirty();
         if (!args.quiet) {
