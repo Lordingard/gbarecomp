@@ -13,6 +13,7 @@ struct RuntimeControlPreferences {
     bool rewind_enabled = true;
     int fast_forward_multiplier = 4;
     int state_slot = 1;
+    int fullscreen = -1; // Unset: retain the launcher/CLI default.
 };
 
 inline bool load_runtime_controls(const std::filesystem::path& path,
@@ -38,6 +39,7 @@ inline bool load_runtime_controls(const std::filesystem::path& path,
             controls.rewind_enabled = *value;
         read_int("fast_forward_multiplier", 2, 10, controls.fast_forward_multiplier);
         read_int("state_slot", 1, slot_count, controls.state_slot);
+        read_int("fullscreen", 0, 2, controls.fullscreen);
         error.clear();
         return true;
     } catch (const toml::parse_error&) {
@@ -48,7 +50,7 @@ inline bool load_runtime_controls(const std::filesystem::path& path,
 
 inline bool save_runtime_controls(const std::filesystem::path& path,
                                   const RuntimeControlPreferences& controls,
-                                  std::string& error) {
+                                  std::string& error, bool fullscreen_only = false) {
     try {
         toml::table table;
         std::ifstream previous(path);
@@ -59,10 +61,14 @@ inline bool save_runtime_controls(const std::filesystem::path& path,
         }
         if (previous) table = toml::parse(previous);
         previous.close();
-        table.insert_or_assign("assist_tools_enabled", controls.assist_tools_enabled);
-        table.insert_or_assign("rewind_enabled", controls.rewind_enabled);
-        table.insert_or_assign("fast_forward_multiplier", controls.fast_forward_multiplier);
-        table.insert_or_assign("state_slot", controls.state_slot);
+        if (!fullscreen_only) {
+            table.insert_or_assign("assist_tools_enabled", controls.assist_tools_enabled);
+            table.insert_or_assign("rewind_enabled", controls.rewind_enabled);
+            table.insert_or_assign("fast_forward_multiplier", controls.fast_forward_multiplier);
+            table.insert_or_assign("state_slot", controls.state_slot);
+        }
+        if (controls.fullscreen >= 0 && controls.fullscreen <= 2)
+            table.insert_or_assign("fullscreen", controls.fullscreen);
         auto temporary = path;
         temporary += ".tmp." + std::to_string(
             std::chrono::steady_clock::now().time_since_epoch().count());

@@ -34,6 +34,7 @@
 #include "runtime_bus_bridge.h"
 #include "save_config.h"
 #include "save_file.h"
+#include <functional>
 #include "self_heal.h"
 #include "overlay_loader.h"
 #include "../gba/mod_audio.h"
@@ -172,6 +173,7 @@ struct Args {
     // 2 exclusive (SDL_WINDOW_FULLSCREEN). --fullscreen (bare) = 1;
     // --fullscreen=<0|1|2> selects explicitly.
     int fullscreen = 0;
+    bool fullscreen_explicit = false;
     int  volume = 100;            // --volume 0..100: pushed-sample gain
     bool linear_filter = false;   // --linear-filter 1: linear texture scaling
     bool sharp_filter = false;    // --sharp-filter 1: integer prescale + linear finish
@@ -244,7 +246,21 @@ struct RuntimeUiContext {
     int fast_forward_multiplier = 4;
     // Game-supplied handlers for keys the engine does not own.
     const RunOptions* opts = nullptr;
+    std::function<bool()> flush_before_action;
 };
+
+void persist_runtime_controls(RuntimeUiContext* c) {
+    RuntimeControlPreferences controls;
+    controls.assist_tools_enabled = c->assist_tools_enabled;
+    controls.rewind_enabled = c->rewind_enabled;
+    controls.fast_forward_multiplier = c->fast_forward_multiplier;
+    controls.state_slot = c->state_slot;
+    if (c->opts && c->opts->remember_fullscreen)
+        controls.fullscreen = c->window->fullscreen();
+    std::string error;
+    if (!save_runtime_controls(c->controls_path, controls, error))
+        std::fprintf(stderr, "[gbarecomp:runtime] %s\n", error.c_str());
+}
 
 int runtime_ui_get(void* opaque, const RecompRuntimeUiItem* item, int* out) {
     auto* c = static_cast<RuntimeUiContext*>(opaque);
@@ -313,18 +329,13 @@ int runtime_ui_set(void* opaque, const RecompRuntimeUiItem* item, int value) {
 #endif
     else if (c->opts && c->opts->ui_set) return c->opts->ui_set(item->key, value);
     else return 0;
-    if (std::strcmp(item->key, GBARECOMP_UI_KEY_STATE_SLOT) == 0 ||
+    if ((std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_FULLSCREEN) == 0 &&
+         c->opts && c->opts->remember_fullscreen) ||
+        std::strcmp(item->key, GBARECOMP_UI_KEY_STATE_SLOT) == 0 ||
         std::strcmp(item->key, GBARECOMP_UI_KEY_ASSIST_ENABLED) == 0 ||
         std::strcmp(item->key, GBARECOMP_UI_KEY_REWIND_ENABLED) == 0 ||
         std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_FORWARD_SPEED) == 0) {
-        RuntimeControlPreferences controls;
-        controls.assist_tools_enabled = c->assist_tools_enabled;
-        controls.rewind_enabled = c->rewind_enabled;
-        controls.fast_forward_multiplier = c->fast_forward_multiplier;
-        controls.state_slot = c->state_slot;
-        std::string error;
-        if (!save_runtime_controls(c->controls_path, controls, error))
-            std::fprintf(stderr, "[gbarecomp:runtime] %s\n", error.c_str());
+        persist_runtime_controls(c);
     }
     return 1;
 }
@@ -354,7 +365,10 @@ int runtime_ui_action(void* opaque, const RecompRuntimeUiItem* item) {
         recomp_runtime_ui_close(c->ui);
         return 1;
     }
-    if (c->opts && c->opts->ui_action) return c->opts->ui_action(item->key);
+    if (c->opts && c->opts->ui_action) {
+        if (c->flush_before_action && !c->flush_before_action()) return 0;
+        return c->opts->ui_action(item->key);
+    }
     return 0;
 }
 
@@ -990,10 +1004,12 @@ bool parse_cli(int argc, char** argv, Args* args, std::string* err) {
             continue;
         }
         if (s == "--fullscreen") {
+            args->fullscreen_explicit = true;
             args->fullscreen = 1;  // bare flag: borderless (back-compat)
             continue;
         }
         if (s.rfind("--fullscreen=", 0) == 0) {
+            args->fullscreen_explicit = true;
             int v = 0;
             if (!parse_int(s.c_str() + 13, &v)) {
                 if (err) *err = "invalid --fullscreen value (expected 0..2)";
@@ -1151,6 +1167,21 @@ extern "C" unsigned g_ws_extra  = 0;
 extern "C" unsigned g_ws_extra_left  = 0;
 extern "C" unsigned g_ws_extra_right = 0;
 extern "C" unsigned g_ws_view_width  = 240;
+
+int load_remembered_fullscreen(const char* directory) {
+    RuntimeControlPreferences controls;
+    std::string error;
+    return load_runtime_controls(std::filesystem::path(directory) / "runtime-controls.toml", controls, 9, error)
+        ? controls.fullscreen : -1;
+}
+
+void save_remembered_fullscreen(const char* directory, int mode) {
+    RuntimeControlPreferences controls;
+    controls.fullscreen = mode;
+    std::string error;
+    if (!save_runtime_controls(std::filesystem::path(directory) / "runtime-controls.toml", controls, error, true))
+        std::fprintf(stderr, "[gbarecomp:launcher] %s\n", error.c_str());
+}
 
 int run_game(int argc, char** argv, const RunOptions& opts) {
     // Game runners install this before entering run_game(). Clear it on every
@@ -2518,6 +2549,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         win.set_fps_readout(opts.show_fps_by_default);
 #if defined(GBARECOMP_RUNTIME_UI)
         runtime_ui_context.window = &win;
+        runtime_ui_context.flush_before_action = flush_save;
         runtime_ui_context.gyro_sensitivity = &args.gyro_sensitivity;
         runtime_ui_context.assist_tools_exposed = opts.expose_assist_tools;
         runtime_ui_context.assist_tools_enabled =
@@ -2540,6 +2572,12 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             runtime_ui_context.rewind_enabled = controls.rewind_enabled;
             runtime_ui_context.fast_forward_multiplier = controls.fast_forward_multiplier;
             runtime_ui_context.state_slot = controls.state_slot;
+            if (opts.remember_fullscreen && !args.fullscreen_explicit && controls.fullscreen >= 0) {
+                args.fullscreen = controls.fullscreen;
+                win.set_fullscreen(controls.fullscreen);
+            }
+            if (opts.remember_fullscreen)
+                std::printf("runtime_fullscreen_loaded mode=%d\n", win.fullscreen());
             std::printf("runtime_controls_loaded speed=%d rewind=%d slot=%d assist=%d\n",
                         controls.fast_forward_multiplier, controls.rewind_enabled,
                         controls.state_slot, controls.assist_tools_enabled);
@@ -3078,6 +3116,9 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             // toggles back into that same mode.
             const int on_mode = args.fullscreen ? args.fullscreen : 1;
             win.set_fullscreen(win.fullscreen() ? 0 : on_mode);
+#if defined(GBARECOMP_RUNTIME_UI)
+            if (opts.remember_fullscreen) persist_runtime_controls(&runtime_ui_context);
+#endif
         }
         if (ev.window_bigger)  win.adjust_scale(+1);
         if (ev.window_smaller) win.adjust_scale(-1);

@@ -153,6 +153,8 @@ struct RunOptions {
     // near-full-screen panels, larger hit targets, and touch-oriented footer
     // copy. False preserves the desktop/TV presentation for existing games.
     bool ui_touch_friendly = false;
+    // Opt-in persistent fullscreen shared by the launcher and runtime menu.
+    bool remember_fullscreen = false;
 
     // Game/device calibration beneath the user-facing gyro multiplier.
     // A menu value of 1.00x means this game's authored baseline; 0.75 here
@@ -230,5 +232,8 @@ struct RunOptions {
 };
 
 int run_game(int argc, char** argv, const RunOptions& opts = {});
+// Keep the launcher header independent of the preferences parser dependency.
+int load_remembered_fullscreen(const char* directory);
+void save_remembered_fullscreen(const char* directory, int mode);
 
 }  // namespace gbarecomp

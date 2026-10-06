@@ -707,6 +707,10 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
 
     SeamConfig cfg;
     seam_config_load(config_path, &cfg);
+    if (opts.remember_fullscreen) {
+        const int mode = gbarecomp::load_remembered_fullscreen(dir.c_str());
+        if (mode >= 0) cfg.fullscreen = mode;
+    }
     seam_apply_controller(cfg);
     if (cfg.sharp_filter < 0)
         cfg.sharp_filter = opts.launcher_default_sharp_filter ? 1 : 0;
@@ -955,6 +959,9 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     cfg.input_source = ls.player_src[0];
     cfg.gamepad_guid = ls.player_gamepad_guid[0];
     seam_config_save(config_path, cfg);
+    if (opts.remember_fullscreen) {
+        gbarecomp::save_remembered_fullscreen(dir.c_str(), cfg.fullscreen);
+    }
     // Only rewrite [Solar] when this recomp-ui pin actually surfaced the panel;
     // otherwise the values never round-tripped through it and writing them back
     // would just churn the file the game owns.
