@@ -1767,6 +1767,19 @@ void HostWindow::set_fullscreen(int mode) {
     if (mode < 0) mode = 0;
     if (mode > 2) mode = 2;
     if (b->fullscreen == mode) return;
+    if (mode == 2 && b->freely_resizable_window) {
+        // SDL otherwise picks a mode from the windowed dimensions, which can
+        // leave a small centered image on displays with unscaled lower modes.
+        SDL_DisplayMode desktop{};
+        const int display = SDL_GetWindowDisplayIndex(b->window);
+        if (display < 0 || SDL_GetDesktopDisplayMode(display, &desktop) != 0 ||
+            SDL_SetWindowDisplayMode(b->window, &desktop) != 0) {
+            std::fprintf(stderr, "host_window: exclusive desktop mode failed: %s\n", SDL_GetError());
+            return;
+        }
+        std::fprintf(stderr, "host_window: exclusive target=%dx%d@%dHz\n",
+                     desktop.w, desktop.h, desktop.refresh_rate);
+    }
     // 0 windowed, 1 borderless desktop, 2 exclusive fullscreen.
     Uint32 flag = mode == 2 ? SDL_WINDOW_FULLSCREEN
                 : mode == 1 ? SDL_WINDOW_FULLSCREEN_DESKTOP
@@ -1778,6 +1791,8 @@ void HostWindow::set_fullscreen(int mode) {
                          mode == 2 ? "fullscreen-exclusive"
                          : mode == 1 ? "fullscreen-borderless"
                                      : "windowed");
+    } else {
+        std::fprintf(stderr, "host_window: fullscreen switch failed: %s\n", SDL_GetError());
     }
 }
 
