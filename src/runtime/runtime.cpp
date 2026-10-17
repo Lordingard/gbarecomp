@@ -3011,6 +3011,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                         assist_script_events.size());
     }
 
+    auto pointer_state_epoch = g_runtime_state_epoch;
     auto pump_host_input = [&]() {
         if (!args.window) return;
         capture_rewind_point();
@@ -3044,7 +3045,8 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             std::fflush(stdout);
         }
         ev.fast_forward = ev.fast_forward || assist_script_fast;
-        if (!input_replay_requested) bus.io().set_keyinput(ev.keyinput);
+        if (!input_replay_requested && !opts.pointer_input)
+            bus.io().set_keyinput(ev.keyinput);
         if (bus.gyro().active()) {
             // Mouse-drag is angular velocity, not absolute angle: moving while
             // held produces rotation and holding still returns to center.
@@ -3055,17 +3057,6 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 static_cast<int>(raw_offset * args.gyro_sensitivity *
                                  gyro_sensitivity_calibration),
                 -0x600, 0x600));
-        }
-        if (input_record_requested &&
-            (!input_record_have_value || ev.keyinput != input_record_last_value)) {
-            char row[64];
-            std::snprintf(row, sizeof(row), "%llu,0x%04X\n",
-                          static_cast<unsigned long long>(ppu.frame_count()),
-                          static_cast<unsigned>(ev.keyinput));
-            input_record_stream << row;
-            input_record_stream.flush();
-            input_record_have_value = true;
-            input_record_last_value = ev.keyinput;
         }
         if (ev.quit) host_quit = true;
         if (bus.solar().active() && ev.solar_live) {
@@ -3228,6 +3219,44 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                                  e.c_str());
                 }
             }
+        }
+        if (opts.pointer_input) {
+            GamePointerInput pointer;
+            pointer.frame = ppu.frame_count();
+            pointer.ewram = bus.ewram_ptr();
+            pointer.ewram_size = 256 * 1024;
+            pointer.iwram = bus.iwram_ptr();
+            pointer.iwram_size = 32 * 1024;
+            pointer.wheel = ev.wheel;
+            pointer.wheel_x = ev.wheel_x;
+            pointer.wheel_y = ev.wheel_y;
+            pointer.physical_keys = ev.keyinput;
+            pointer.x = ev.pointer_x;
+            pointer.y = ev.pointer_y;
+            pointer.hover_x = ev.hover_x;
+            pointer.hover_y = ev.hover_y;
+            pointer.pointer_down = ev.pointer_down;
+            pointer.primary = ev.pointer_primary;
+            pointer.secondary = ev.pointer_secondary;
+            pointer.reset = ev.pointer_blocked || host_paused || ev.toggle_pause ||
+                ev.quit || ev.load_slot || rewind_requested || input_replay_requested ||
+                pointer_state_epoch != g_runtime_state_epoch;
+            pointer_state_epoch = g_runtime_state_epoch;
+            const auto buttons = opts.pointer_input(pointer);
+            if (!pointer.reset) ev.keyinput &= static_cast<uint16_t>(~(buttons & 0x03ff));
+        }
+        if (!input_replay_requested && opts.pointer_input)
+            bus.io().set_keyinput(ev.keyinput);
+        if (input_record_requested &&
+            (!input_record_have_value || ev.keyinput != input_record_last_value)) {
+            char row[64];
+            std::snprintf(row, sizeof(row), "%llu,0x%04X\n",
+                          static_cast<unsigned long long>(ppu.frame_count()),
+                          static_cast<unsigned>(ev.keyinput));
+            input_record_stream << row;
+            input_record_stream.flush();
+            input_record_have_value = true;
+            input_record_last_value = ev.keyinput;
         }
     };
 

@@ -44,6 +44,9 @@
 
 #include "recomp_launcher.h"    // recomp-ui C ABI (include dir via recomp_ui.cmake)
 #include "launcher_profile.h"   // launcher_profile_apply("gba", ...)
+#if defined(RECOMP_LAUNCHER_HAS_INPUT_TOGGLES)
+#include "recomp_runtime_ui.h"
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -58,6 +61,32 @@
 #include <vector>
 
 namespace gbarecomp_seam {
+
+#if defined(RECOMP_LAUNCHER_HAS_INPUT_TOGGLES)
+inline std::vector<RecompLauncherCInputToggle> seam_input_toggles(const gbarecomp::RunOptions& opts) {
+    std::vector<RecompLauncherCInputToggle> toggles;
+    if (!opts.ui_extra_items || !opts.ui_get || !opts.ui_set) return toggles;
+    const auto* items = static_cast<const RecompRuntimeUiItem*>(opts.ui_extra_items);
+    for (std::size_t i = 0; i < opts.ui_extra_item_count && toggles.size() < 16; ++i) {
+        const auto& item = items[i];
+        int value = 0;
+        if (item.type == RECOMP_RUNTIME_UI_BOOL && item.key && item.label && item.section &&
+            !std::strcmp(item.section, "Input") && (!opts.ui_enabled || opts.ui_enabled(item.key)) &&
+            opts.ui_get(item.key, &value)) toggles.push_back({item.key, item.label, value ? 1 : 0});
+    }
+    return toggles;
+}
+
+inline void seam_commit_input_toggles(const gbarecomp::RunOptions& opts,
+                                      const std::vector<RecompLauncherCInputToggle>& toggles) {
+    if (!opts.ui_get || !opts.ui_set) return;
+    for (const auto& item : toggles) {
+        int previous = 0;
+        if (opts.ui_get(item.key, &previous) && (previous != 0) != (item.value != 0))
+            opts.ui_set(item.key, item.value ? 1 : 0);
+    }
+}
+#endif
 
 inline int verify_retail_gba_bios(const char* path,
                                   RecompLauncherCBiosVerify* out) {
@@ -823,6 +852,11 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     RecompLauncherCGameInfo gi;
     std::memset(&gi, 0, sizeof(gi));
     launcher_profile_apply("gba", &gi);   // GBA identity + capability defaults
+#if defined(RECOMP_LAUNCHER_HAS_INPUT_TOGGLES)
+    auto input_toggles = seam_input_toggles(opts);
+    gi.input_toggles = input_toggles.data();
+    gi.input_toggle_count = static_cast<int>(input_toggles.size());
+#endif
     gi.name = opts.builtin_game_name ? opts.builtin_game_name : "GBA cartridge";
     gi.region = opts.launcher_region;
     // SHA-1 is gbarecomp's real ROM identity gate — hand the launcher the
@@ -959,6 +993,9 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     cfg.input_source = ls.player_src[0];
     cfg.gamepad_guid = ls.player_gamepad_guid[0];
     seam_config_save(config_path, cfg);
+#if defined(RECOMP_LAUNCHER_HAS_INPUT_TOGGLES)
+    seam_commit_input_toggles(opts, input_toggles);
+#endif
     if (opts.remember_fullscreen) {
         gbarecomp::save_remembered_fullscreen(dir.c_str(), cfg.fullscreen);
     }

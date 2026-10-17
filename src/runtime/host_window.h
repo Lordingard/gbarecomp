@@ -111,6 +111,17 @@ public:
     void service_events();
 
     struct Events {
+        int pointer_x = -1;
+        int pointer_y = -1;
+        int hover_x = -1;
+        int hover_y = -1;
+        int wheel = 0;
+        int wheel_x = -1;
+        int wheel_y = -1;
+        bool pointer_down = false;
+        bool pointer_primary = false;
+        bool pointer_secondary = false;
+        bool pointer_blocked = false;
         bool     quit = false;
         // GBA KEYINPUT layout. Active-low: 1 = released, 0 = pressed.
         // Bits: 0=A 1=B 2=Sel 3=Sta 4=Right 5=Left 6=Up 7=Down 8=R 9=L.

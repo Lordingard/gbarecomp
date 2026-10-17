@@ -12,6 +12,28 @@
 
 namespace gbarecomp {
 
+// Game-owned input policy at host-input boundaries. RAM is read-only;
+// return additional pressed GBA buttons (active-high), never guest mutations.
+struct GamePointerInput {
+    std::uint64_t frame = 0;
+    const std::uint8_t* ewram = nullptr;
+    std::size_t ewram_size = 0;
+    const std::uint8_t* iwram = nullptr;
+    std::size_t iwram_size = 0;
+    int wheel = 0;
+    int wheel_x = -1;
+    int wheel_y = -1;
+    std::uint16_t physical_keys = 0x03ff;
+    int x = -1;
+    int y = -1;
+    int hover_x = -1;
+    int hover_y = -1;
+    bool pointer_down = false;
+    bool primary = false;
+    bool secondary = false;
+    bool reset = false;
+};
+
 // Read-only state published to an opted-in game's extended-view policy once
 // per emulated frame. The shared runtime owns the wider surface; the game owns
 // the decision about whether the current scene has authentic margin content.
@@ -35,6 +57,7 @@ struct ExtendedViewFrameInfo {
 // constants from GbaBios, empty ROM hash that forces the user to
 // provide --config or --rom-sha1).
 struct RunOptions {
+    std::uint16_t (*pointer_input)(const GamePointerInput&) = nullptr;
     const char*   builtin_game_name = nullptr;
     const char*   builtin_rom_sha1  = nullptr;
     std::uint32_t builtin_rom_crc32 = 0;

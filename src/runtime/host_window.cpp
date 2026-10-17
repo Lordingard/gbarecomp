@@ -1941,10 +1941,46 @@ HostWindow::Events HostWindow::pump() {
             ImGui::SetCurrentContext(b->runtime_imgui_context);
             ImGui_ImplSDL2_ProcessEvent(&e);
         }
-        if (runtime_ui_event(b->runtime_ui, e)) continue;
+        if (runtime_ui_event(b->runtime_ui, e)) {
+            ev.pointer_blocked = true;
+            continue;
+        }
 #endif
         if (e.type == SDL_QUIT) {
             ev.quit = true;
+        } else if (e.type == SDL_MOUSEBUTTONDOWN &&
+                   e.button.which != SDL_TOUCH_MOUSEID &&
+                   e.button.windowID == SDL_GetWindowID(b->window)) {
+            // SDL transforms fixed logical coordinates, including DPI and bars.
+            if (b->expanded_view || b->resize_driven_view) continue;
+            const int x = e.button.x, y = e.button.y;
+            if (x < 0 || y < 0 || x >= b->base_w || y >= b->base_h) continue;
+            if (!ev.pointer_primary && !ev.pointer_secondary &&
+                (e.button.button == SDL_BUTTON_LEFT || e.button.button == SDL_BUTTON_RIGHT)) {
+                ev.pointer_x = x;
+                ev.pointer_y = y;
+                ev.pointer_primary = e.button.button == SDL_BUTTON_LEFT;
+                ev.pointer_secondary = e.button.button == SDL_BUTTON_RIGHT;
+            }
+        } else if (e.type == SDL_MOUSEWHEEL && e.wheel.which != SDL_TOUCH_MOUSEID &&
+                   e.wheel.windowID == SDL_GetWindowID(b->window)) {
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+            if (b->expanded_view || b->resize_driven_view || b->touch_controls) continue;
+            float x = -1, y = -1;
+#if SDL_VERSION_ATLEAST(2, 26, 0)
+            // SDL's logical renderer already transforms wheel event positions,
+            // just as it does mouse-button coordinates.
+            x = e.wheel.mouseX; y = e.wheel.mouseY;
+#else
+            int wx = 0, wy = 0;
+            SDL_GetMouseState(&wx, &wy);
+            SDL_RenderWindowToLogical(b->renderer, wx, wy, &x, &y);
+#endif
+            if (x < 0 || y < 0 || x >= b->base_w || y >= b->base_h) continue;
+            const int delta = std::clamp(e.wheel.y, -8, 8) * (e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
+            ev.wheel = std::clamp(ev.wheel + delta, -8, 8);
+            ev.wheel_x = static_cast<int>(x); ev.wheel_y = static_cast<int>(y);
+#endif
         } else if (e.type == SDL_CONTROLLERDEVICEADDED) {
             if (!b->controller) open_first_game_controller(b);
         } else if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
@@ -2089,9 +2125,33 @@ HostWindow::Events HostWindow::pump() {
         keys &= static_cast<uint16_t>(~touch_buttons);
     }
     ev.keyinput = keys;
+    ev.pointer_blocked = ev.pointer_blocked ||
+        (SDL_GetWindowFlags(b->window) & SDL_WINDOW_INPUT_FOCUS) == 0;
 #if defined(GBARECOMP_RUNTIME_UI)
-    if (b->runtime_ui && recomp_runtime_ui_is_open(b->runtime_ui))
+    if (b->runtime_ui && recomp_runtime_ui_is_open(b->runtime_ui)) {
         ev.keyinput = 0x03FFu;
+        ev.pointer_blocked = true;
+    }
+#endif
+    if (ev.pointer_blocked) {
+        ev.pointer_primary = false;
+        ev.pointer_secondary = false;
+        ev.wheel = 0; ev.wheel_x = ev.wheel_y = -1;
+    }
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    if (!ev.pointer_blocked && !b->touch_controls && !b->expanded_view &&
+        !b->resize_driven_view && SDL_GetMouseFocus() == b->window) {
+        int window_x = 0, window_y = 0;
+        const auto buttons = SDL_GetMouseState(&window_x, &window_y);
+        float logical_x = -1, logical_y = -1;
+        SDL_RenderWindowToLogical(b->renderer, window_x, window_y, &logical_x, &logical_y);
+        ev.pointer_down = (buttons & (SDL_BUTTON_LMASK | SDL_BUTTON_RMASK)) != 0;
+        if (logical_x >= 0 && logical_y >= 0 &&
+            logical_x < b->base_w && logical_y < b->base_h) {
+            ev.hover_x = static_cast<int>(logical_x);
+            ev.hover_y = static_cast<int>(logical_y);
+        }
+    }
 #endif
 
     int mouse_x = 0;
